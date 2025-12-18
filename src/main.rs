@@ -1,9 +1,17 @@
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
 use std::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 
-// Test struct, used only to demonstrate move semantics
+/// Message sent to the logging task.
+/// Each message represents a line received from a client.
+#[derive(Debug)]
+struct LogMessage {
+    text: String,
+}
+
+/// Test struct, used only to demonstrate move semantics
 #[derive(Debug)]
 struct Test {
     test: i32,
@@ -37,6 +45,18 @@ impl State {
 
 #[tokio::main]
 async fn main() {
+    // Channel used for logging client input.
+    // mpsc = many producers (client handlers), single consumer (logger task)
+    let (log_tx, mut log_rx) = mpsc::channel::<LogMessage>(100);
+
+    // Dedicated task that owns the logging logic.
+    // This task is the ONLY place where logging happens.
+    tokio::spawn(async move {
+        while let Some(msg) = log_rx.recv().await {
+            println!("[LOG] {}", msg.text);
+        }
+    });
+
     // Shared state for all connections
     let state = Arc::new(State::new());
 
@@ -52,6 +72,8 @@ async fn main() {
         let (socket, _) = listener.accept().await.unwrap();
         // Arc cloning is cheap; it only increments the reference counter
         let state = state.clone();
+        // For sending messages to the log channel
+        let log_tx = log_tx.clone();
         // Used only to demonstrate ownership transfer into the spawned task
         let test = Test{ test: 1 };
 
@@ -59,7 +81,7 @@ async fn main() {
         // Variables used inside the spawned task are moved into it
         tokio::spawn(async move {
             println!("Using test value: {:?}", test.test);
-            handle_tcp_request(socket, state).await;
+            handle_tcp_request(socket, state, log_tx).await;
         });
 
         // `test` is no longer accessible here because it was moved
@@ -70,6 +92,7 @@ async fn main() {
 async fn handle_tcp_request(
     mut socket: TcpStream,
     state: Arc<State>,
+    log_tx: mpsc::Sender<LogMessage>,
 ) {
     let mut buf = [0u8; 1024];
 
@@ -84,6 +107,14 @@ async fn handle_tcp_request(
         // `from_utf8_lossy` is used to tolerate invalid UTF-8 input
         let input = String::from_utf8_lossy(&buf[..n]).trim().to_string();
 
+        // Instead of logging directly here, we send the message
+        // to a dedicated logging task using message passing.
+        // Send client input to the logger task via channel.
+        // This decouples logging from request handling.
+        let _ = log_tx.send(LogMessage {
+            text: input.clone(),
+        }).await;
+
         let current = state.increment();
 
         let response = format!(
@@ -92,7 +123,5 @@ async fn handle_tcp_request(
         );
 
         socket.write_all(response.as_bytes()).await.unwrap();
-
-        println!("Received: {} (request #{})", input, current);
     }
 }
