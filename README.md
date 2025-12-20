@@ -28,5 +28,16 @@ nc 127.0.0.1 7000
 
 ## What happens
 
-Any text sent by a client is forwarded to a logger task via a mpsc channel and printed on the server side as [LOG] ...
-The server responds to the client with: `OK: '<input>' (request #N)`.
+Any text sent by a TCP client is forwarded to a **dedicated logger task** via a Tokio `mpsc` channel and printed on the server side as `[LOG] ...`.
+
+At the same time, the server runs an **independent background task** that asynchronously copies everything typed into the server's **standard input (STDIN)** into a file called `log.txt`.
+
+This demonstrates that:
+- TCP sockets, STDIN, and files are all treated as **asynchronous byte streams**
+- the same I/O primitives (`AsyncRead`, `AsyncWrite`, `io::copy`) work uniformly across them
+- multiple asynchronous tasks can perform I/O concurrently without blocking each other
+
+The server responds to each TCP client with:
+```
+OK: '<input>' (request #N)
+```
