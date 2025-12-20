@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
@@ -17,6 +19,7 @@ struct Test {
     test: i32,
 }
 
+/// Current state for transferring between threads
 struct State {
     counter: Mutex<i32>,
 }
@@ -56,6 +59,19 @@ async fn main() {
             println!("[LOG] {}", msg.text);
         }
     });
+
+    // Background task demonstrating async I/O piping:
+    // Everything typed into STDIN will be asynchronously written to log.txt.
+    // This shows that stdin and files are just AsyncRead / AsyncWrite streams.
+    tokio::spawn(async {
+        let mut stdin = io::stdin();
+        let mut file = File::create("log.txt").await.unwrap();
+
+        if io::copy(&mut stdin, &mut file).await.is_err() {
+            eprintln!("STDIN -> file copy failed");
+        }
+    });
+
 
     // Shared state for all connections
     let state = Arc::new(State::new());
