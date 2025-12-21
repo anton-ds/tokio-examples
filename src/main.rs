@@ -1,5 +1,8 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::task::{Context, Poll};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::io;
@@ -40,6 +43,50 @@ impl State {
     } // mutex is free
 }
 
+/// WaitForCount is a custom Future that completes
+/// when the shared request counter reaches a target value.
+///
+/// This demonstrates a Future that:
+/// - does NOT do work by itself
+/// - observes real application state
+/// - becomes ready when an external condition is met
+struct WaitForCount {
+    state: Arc<State>,
+    target: i32,
+}
+
+impl WaitForCount {
+    fn new(state: Arc<State>, target: i32) -> Self {
+        Self { state, target }
+    }
+}
+
+impl Future for WaitForCount {
+    type Output = i32;
+
+    fn poll(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Self::Output> {
+        let current = {
+            let lock = self.state.counter.lock().unwrap();
+            *lock
+        };
+
+        if current >= self.target {
+            // Condition satisfied: the future is complete
+            Poll::Ready(current)
+        } else {
+            // Not ready yet.
+            // Register interest in waking again later.
+            // In real systems this would be driven by a channel or event;
+            // here we re-wake to keep the example simple and observable.
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
 // The current_thread runtime flavor is a lightweight, single-threaded runtime.
 // It is a good choice when only spawning a few tasks and opening a handful of sockets.
 // For example, this option works well when providing a synchronous API bridge
@@ -72,9 +119,15 @@ async fn main() {
         }
     });
 
-
     // Shared state for all connections
     let state = Arc::new(State::new());
+    let wait_state = state.clone();
+
+    // This background task demonstrates how a custom Future is used in practice.
+    tokio::spawn(async move {
+        let reached = WaitForCount::new(wait_state, 5).await;
+        println!("Reached {} total requests", reached);
+    });
 
     // TCP server
     let listener = TcpListener::bind("127.0.0.1:7000")
