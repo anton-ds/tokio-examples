@@ -26,6 +26,11 @@ or
 nc 127.0.0.1 7000
 ```
 
+The server responds to each TCP client with:
+```
+OK: '<input>' (request #N)
+```
+
 ## What happens
 
 Any text sent by a TCP client is forwarded to a **dedicated logger task** via a Tokio `mpsc` channel and 
@@ -50,8 +55,3 @@ Each of them is handled as an asynchronous byte stream, allowing the server to:
 - read and write data without blocking the runtime
 - run unrelated I/O operations in parallel tasks
 - keep the core request-handling logic simple and focused
-
-The server responds to each TCP client with:
-```
-OK: '<input>' (request #N)
-```
