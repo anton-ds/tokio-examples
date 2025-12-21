@@ -8,6 +8,7 @@ This is a small **educational Tokio example** showing how to:
 - Use **Tokio `mpsc` channels** for message passing
 - Move logging logic into a **dedicated task**
 - Avoid holding a mutex across `.await`
+- Model application logic using a **custom `Future`** driven by real application state
 
 ## How to run
 
