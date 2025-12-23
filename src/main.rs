@@ -43,46 +43,72 @@ impl State {
     } // mutex is free
 }
 
-/// WaitForCount is a custom Future that completes
-/// when the shared request counter reaches a target value.
+/// WaitForStateMachine is a custom Future that completes
+/// when the shared request counter reaches a terminal state.
 ///
 /// This demonstrates a Future that:
 /// - does NOT do work by itself
 /// - observes real application state
 /// - becomes ready when an external condition is met
-struct WaitForCount {
+struct WaitForStateMachine {
     state: Arc<State>,
-    target: i32,
+    machine: CountState,
 }
 
-impl WaitForCount {
-    fn new(state: Arc<State>, target: i32) -> Self {
-        Self { state, target }
+enum CountState {
+    Start,
+    Mid { note: String },
+    Done,
+}
+
+impl WaitForStateMachine {
+    fn new(state: Arc<State>) -> Self {
+        Self {
+            state,
+            machine: CountState::Start,
+        }
     }
 }
 
-impl Future for WaitForCount {
-    type Output = i32;
+impl Future for WaitForStateMachine {
+    type Output = String;
 
     fn poll(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Self::Output> {
+        let this = self.get_mut();
         let current = {
-            let lock = self.state.counter.lock().unwrap();
+            let lock = this.state.counter.lock().unwrap();
             *lock
         };
 
-        if current >= self.target {
-            // Condition satisfied: the future is complete
-            Poll::Ready(current)
-        } else {
-            // Not ready yet.
-            // Register interest in waking again later.
-            // In real systems this would be driven by a channel or event;
-            // here we re-wake to keep the example simple and observable.
-            cx.waker().wake_by_ref();
-            Poll::Pending
+        match &mut this.machine {
+            CountState::Start => {
+                if current >= 3 {
+                    this.machine = CountState::Mid {
+                        note: "reached 3 requests".to_string(),
+                    };
+                }
+                // ❗enqueue current task again, not for production!
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            CountState::Mid { note } => {
+                if current >= 5 {
+                    let output = format!(
+                        "Reached 5 total requests (note from mid-state: {})",
+                        note
+                    );
+                    this.machine = CountState::Done;
+                    Poll::Ready(output)
+                } else {
+                    // ❗enqueue current task again, not for production!
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+            CountState::Done => Poll::Pending,
         }
     }
 }
@@ -125,8 +151,8 @@ async fn main() {
 
     // This background task demonstrates how a custom Future is used in practice.
     tokio::spawn(async move {
-        let reached = WaitForCount::new(wait_state, 5).await;
-        println!("Reached {} total requests", reached);
+        let reached = WaitForStateMachine::new(wait_state).await;
+        println!("{}", reached);
     });
 
     // TCP server
